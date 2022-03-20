@@ -7,7 +7,6 @@ def catch_the_signal(signal, frame):
 signal.signal(signal.SIGINT, catch_the_signal)
 
 import os
-import logging
 import socket
 from threading import Thread
 from contextlib import closing
@@ -17,6 +16,14 @@ from stem import SocketError as StemSocketError
 from stem import process
 import click
 
+import logging
+import logging.config
+logging.config.dictConfig({
+    'version': 1,
+    'disable_existing_loggers': True,
+})
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.ERROR)
 
 
 # Handler for Http requests.
@@ -24,39 +31,40 @@ import click
 class MyHandler(BaseHTTPRequestHandler):
     data_to_send = None
     def do_GET(self):
-        is_unicode = True
-        try:
-            self.data_to_send.decode('utf-8')
-        except UnicodeDecodeError:
-            is_unicode = False
+        self.wfile.write(self.data_to_send)
 
-        self.send_response(200)
-        if is_unicode:
-            self.send_header("Content-type", "text/html; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(self.data_to_send)
-        else:
-            self.send_header("Content-type", "application/octet-stream")
-            self.end_headers()
-            self.wfile.write(self.data_to_send)
+        # is_unicode = True
+        # unicode_text = ''
+        # try:
+        #     unicode_text = self.data_to_send.decode('ascii')
+        # except UnicodeDecodeError:
+        #     is_unicode = False
+        #
+        # self.send_response(200)
+        # if is_unicode:
+        #     self.send_header("Content-type", "text/html; charset=utf-8")
+        #     self.end_headers()
+        #     self.wfile.write(self.data_to_send)
+        # else:
+        #     self.send_header("Content-type", "application/octet-stream")
+        #     self.end_headers()
+        #     self.wfile.write(self.data_to_send)
 
 # Minimal HTTP server
 class Httpd():
-    def __init__(self, data,  logger, port = 5050):
+    def __init__(self, data, port = 5050):
         server_address = ('localhost', port)
         MyHandler.data_to_send = data
-        self.logger = logger
         self.server = HTTPServer(server_address, MyHandler)
         self.server.handle_request()
 
 
 class MainThread(Thread):
-    def __init__(self, data_to_send, logger, wait, port):
+    def __init__(self, data_to_send, wait, port):
         Thread.__init__(self)
         self.data_to_send = data_to_send
         self.controller = None
         self.service = None
-        self.logger = logger
         self.wait = wait
         self.port = port
 
@@ -84,7 +92,7 @@ class MainThread(Thread):
         # Print out Onion address.
         print(self.service.service_id + f'.onion')
 
-        self.logger.info(f'Successfully created Hidden service: {self.service.service_id + f".onion"}, listening on localhost:{local_port}.')
+        logger.info(f'Successfully created Hidden service: {self.service.service_id + f".onion"}, listening on localhost:{local_port}.')
 
         if not self.wait:
             n = os.fork()
@@ -93,37 +101,23 @@ class MainThread(Thread):
                 sys.exit()
 
         # Start HTTP server on localhost:local_port
-        server = Httpd(self.data_to_send, port=local_port, logger = self.logger)
+        server = Httpd(self.data_to_send, port=local_port)
 
         # Once the page has been served, remove the hidden service and terminate
         self.controller.remove_ephemeral_hidden_service(self.service.service_id)
-        self.logger.info(f'Hidden service {self.service.service_id}.onion properly terminated.')
+        logger.info(f'Hidden service {self.service.service_id}.onion properly terminated.')
         sys.exit()
 
     def handle_keyboardInterrupt(self, signal, frame):
         try:
             self.controller.remove_ephemeral_hidden_service(self.service.service_id)
-            self.logger.info(f'Hidden service {self.service.service_id}.onion properly terminated.')
-            self.logger.info('Exiting (CTRL-C).')
+            logger.info(f'Hidden service {self.service.service_id}.onion properly terminated.')
+            logger.info('Exiting (CTRL-C).')
             sys.exit()
         except Exception as e:
-            self.logger.error(f'Error while exiting (CTRL-C): {e}')
+            logger.error(f'Error while exiting (CTRL-C): {e}')
             sys.exit()
 
-
-# create logger
-logger = logging.getLogger("TP")
-logger.setLevel(logging.ERROR)
-# create console handler and set level to debug
-ch = logging.StreamHandler()
-ch.setLevel(logging.DEBUG)
-# create formatter
-# formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-formatter = logging.Formatter('%(levelname)s : %(message)s')
-# add formatter to ch
-ch.setFormatter(formatter)
-# add ch to logger
-logger.addHandler(ch)
 
 
 @click.command()
@@ -133,9 +127,23 @@ def cli(blocking, port):
     """
     Documentation
     """
+
+    # create logger
+    logger.setLevel(logging.ERROR)
+    # create console handler and set level to debug
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.ERROR)
+    # create formatter
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    # formatter = logging.Formatter('%(levelname)s : %(message)s')
+    # add formatter to ch
+    ch.setFormatter(formatter)
+    # add ch to logger
+    logger.addHandler(ch)
+
     try:
         data_input = sys.stdin.buffer.read()
-        thread = MainThread(data_to_send=data_input, logger=logger, wait = blocking, port = port)
+        thread = MainThread(data_to_send=data_input, wait = blocking, port = port)
         thread.run()
     except StemSocketError:
         logger.critical('Could not connect to the Tor socks. Is Tor Running?')
